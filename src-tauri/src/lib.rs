@@ -88,7 +88,7 @@ async fn scan_for_projects(root_path: &str) -> Result<Vec<ProjectInfo>, String> 
                 }
             }
     }
-    
+
     Ok(projects)
 }
 

@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import "./App.css";
 import { ProjectList } from "./components/ProjectList";
 import { DriveSelector } from "./components/DriveSelector";
-import { SizeSummary } from "./components/SizeSummary";
+import { SummaryPanel } from "./components/SummaryPanel";
 
 export interface ProjectInfo {
   path: string;
@@ -19,11 +19,12 @@ export interface DriveInfo {
 function App() {
   const [projects, setProjects] = useState<ProjectInfo[]>([]);
   const [scanning, setScanning] = useState(false);
-  const [selectedProjects, setSelectedProjects] = useState<Set<string>>(
-    new Set()
-  );
+  const [selectedProjects, setSelectedProjects] = useState<Set<string>>(new Set());
   const [drives, setDrives] = useState<DriveInfo[]>([]);
   const [selectedDrives, setSelectedDrives] = useState<Set<string>>(new Set());
+  const [dateFilter, setDateFilter] = useState<number>(30);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   useEffect(() => {
     loadDrives();
@@ -48,13 +49,7 @@ function App() {
         const results = await invoke<ProjectInfo[]>("scan_for_projects", {
           rootPath: drivePath,
         });
-
-        const oneMonthAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
-        const filteredProjects = results.filter(
-          (project) => project.last_modified * 1000 < oneMonthAgo
-        );
-
-        setProjects((prev) => [...prev, ...filteredProjects]);
+        setProjects((prev) => [...prev, ...results]);
       }
     } catch (error) {
       console.error("Failed to scan projects:", error);
@@ -64,9 +59,14 @@ function App() {
   };
 
   const deleteSelected = async () => {
+    setDeleting(true);
+    setDeleteError(null);
+    const failedDeletions: { path: string; error: string }[] = [];
+
     for (const projectPath of selectedProjects) {
       try {
         await invoke("delete_node_modules", { path: projectPath });
+        // Remove from selected projects one by one as they succeed
         setSelectedProjects((prev) => {
           const next = new Set(prev);
           next.delete(projectPath);
@@ -74,62 +74,162 @@ function App() {
         });
       } catch (error) {
         console.error(`Failed to delete ${projectPath}:`, error);
+        failedDeletions.push({
+          path: projectPath,
+          error: error instanceof Error ? error.message : 'Unknown error'
+        });
       }
     }
-    await scanProjects();
+
+    // Update projects list
+    setProjects((prev) => 
+      prev.filter(project => 
+        !selectedProjects.has(project.path) || 
+        failedDeletions.some(fd => fd.path === project.path)
+      )
+    );
+
+    // Show error message if any deletions failed
+    if (failedDeletions.length > 0) {
+      setDeleteError(
+        `Failed to delete ${failedDeletions.length} project${failedDeletions.length > 1 ? 's' : ''}`
+      );
+    }
+
+    setDeleting(false);
   };
 
+  const filteredProjects = projects.filter(
+    (project) => project.last_modified * 1000 < Date.now() - dateFilter * 24 * 60 * 60 * 1000
+  );
+
   return (
-    <main className="container">
-      <h1>node_modules Cleanup Utility</h1>
+    <div className="app">
+      <div className="container">
+        <header className="header">
+          <h1 className="title">NodeShred</h1>
+          <p className="subtitle">Clean up unused node_modules and reclaim your disk space</p>
+        </header>
 
-      <DriveSelector
-        drives={drives}
-        selectedDrives={selectedDrives}
-        onDriveSelect={setSelectedDrives}
-        projects={projects}
-        selectedProjects={selectedProjects}
-      />
+        <div className="layout">
+          <div className="sidebar">
+            <div className="sidebar-content">
+              <DriveSelector
+                drives={drives}
+                selectedDrives={selectedDrives}
+                onDriveSelect={setSelectedDrives}
+                projects={filteredProjects}
+                selectedProjects={selectedProjects}
+              />
 
-      <div className="main-content">
-        <div className="left-panel">
-          <div className="controls">
-            <button
-              onClick={scanProjects}
-              disabled={scanning || selectedDrives.size === 0}
-            >
-              {scanning ? "Scanning..." : "Scan selected drive"}
-            </button>
-
-            <button
-              onClick={() =>
-                setSelectedProjects(new Set(projects.map((p) => p.path)))
-              }
-            >
-              Select All
-            </button>
-            <button onClick={() => setSelectedProjects(new Set())}>
-              Deselect All
-            </button>
-
-            <button
-              onClick={deleteSelected}
-              disabled={selectedProjects.size === 0}
-            >
-              Delete Modules
-            </button>
-
+              <SummaryPanel
+                projects={filteredProjects}
+                selectedProjects={selectedProjects}
+              />
+            </div>
           </div>
 
-          <ProjectList
-            projects={projects}
-            selectedProjects={selectedProjects}
-            onProjectSelect={setSelectedProjects}
-            scanning={scanning}
-          />
+          <div className="main-content">
+            <div className="action-bar">
+              <div className="action-group">
+                <button
+                  onClick={scanProjects}
+                  disabled={scanning || selectedDrives.size === 0}
+                  className={`btn btn-primary ${scanning ? 'btn-loading' : ''}`}
+                >
+                  {scanning ? (
+                    <>
+                      <span className="spinner"></span>
+                      Scanning...
+                    </>
+                  ) : (
+                    "Scan Selected Drives"
+                  )}
+                </button>
+
+                <div className="date-filter">
+                  <label htmlFor="dateFilter" className="date-filter-label">
+                    Show projects older than
+                  </label>
+                  <select
+                    id="dateFilter"
+                    value={dateFilter}
+                    onChange={(e) => setDateFilter(Number(e.target.value))}
+                    className="date-filter-select"
+                  >
+                    <option value={7}>7 days</option>
+                    <option value={30}>30 days</option>
+                    <option value={90}>90 days</option>
+                    <option value={180}>180 days</option>
+                    <option value={365}>1 year</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="action-group">
+                <button
+                  onClick={() => setSelectedProjects(new Set(filteredProjects.map((p) => p.path)))}
+                  className="btn btn-secondary"
+                  disabled={filteredProjects.length === 0 || deleting}
+                >
+                  Select All
+                </button>
+
+                <button
+                  onClick={() => setSelectedProjects(new Set())}
+                  className="btn btn-secondary"
+                  disabled={selectedProjects.size === 0 || deleting}
+                >
+                  Deselect All
+                </button>
+
+                <button
+                  onClick={deleteSelected}
+                  disabled={selectedProjects.size === 0 || deleting}
+                  className={`btn btn-danger ${deleting ? 'btn-loading' : ''}`}
+                >
+                  {deleting ? (
+                    <>
+                      <span className="spinner"></span>
+                      Deleting...
+                    </>
+                  ) : (
+                    `Delete Selected (${selectedProjects.size})`
+                  )}
+                </button>
+              </div>
+            </div>
+
+            {deleteError && (
+              <div className="error-banner">
+                <div className="error-content">
+                  <svg className="error-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  <span>{deleteError}</span>
+                </div>
+                <button 
+                  className="error-close"
+                  onClick={() => setDeleteError(null)}
+                  aria-label="Dismiss error"
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+            )}
+
+            <ProjectList
+              projects={filteredProjects}
+              selectedProjects={selectedProjects}
+              onProjectSelect={setSelectedProjects}
+              scanning={scanning}
+            />
+          </div>
         </div>
       </div>
-    </main>
+    </div>
   );
 }
 

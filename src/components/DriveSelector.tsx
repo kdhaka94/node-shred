@@ -1,68 +1,54 @@
-import { useState } from 'react';
-import { SizeSummary } from './SizeSummary';
-import { ProjectInfo } from '../App';
+import { DriveInfo, ProjectInfo } from "../App";
+import "./DriveSelector.css";
 
 interface DriveSelectorProps {
   drives: DriveInfo[];
   selectedDrives: Set<string>;
-  onDriveSelect: (drives: Set<string>) => void;
+  onDriveSelect: (selected: Set<string>) => void;
   projects: ProjectInfo[];
   selectedProjects: Set<string>;
 }
 
-interface DriveInfo {
-  path: string;
-  name: string;
-}
-
-export function DriveSelector({ drives, selectedDrives, onDriveSelect, projects, selectedProjects }: DriveSelectorProps) {
-  const selectAllDrives = () => {
-    onDriveSelect(new Set(drives.map(drive => drive.path)));
-  };
-
-  const deselectAllDrives = () => {
-    onDriveSelect(new Set());
+export function DriveSelector({
+  drives,
+  selectedDrives,
+  onDriveSelect,
+}: DriveSelectorProps) {
+  const toggleDrive = (drivePath: string) => {
+    const newSelected = new Set(selectedDrives);
+    if (newSelected.has(drivePath)) {
+      newSelected.delete(drivePath);
+    } else {
+      newSelected.add(drivePath);
+    }
+    onDriveSelect(newSelected);
   };
 
   return (
     <div className="drive-selector">
-      <div className="drives-section">
-        <div className="section-header">
-          <h3>Select Drives to Scan</h3>
+      <div className="drive-header">
+        <h2 className="drive-title">Storage Drives</h2>
+        <span className="drive-badge">{drives.length}</span>
       </div>
-      <div className="drives-list">
-        {drives.map(drive => (
+
+      <div className="drive-list">
+        {drives.map((drive) => (
           <label key={drive.path} className="drive-item">
-            <input
-              type="checkbox"
-              checked={selectedDrives.has(drive.path)}
-              onChange={(e) => {
-                onDriveSelect(prev => {
-                  const next = new Set(prev);
-                  if (e.target.checked) {
-                    next.add(drive.path);
-                  } else {
-                    next.delete(drive.path);
-                  }
-                  return next;
-                });
-              }}
-            />
-            <span>{drive.name}</span>
+            <div className="drive-item-content">
+              <input
+                type="checkbox"
+                checked={selectedDrives.has(drive.path)}
+                onChange={() => toggleDrive(drive.path)}
+                className="drive-checkbox"
+              />
+              <div className="drive-info">
+                <span className="drive-name">{drive.name}</span>
+                <span className="drive-path">{drive.path}</span>
+              </div>
+            </div>
           </label>
         ))}
       </div>
-      
-    </div>
-    <SizeSummary
-              totalSize={projects.reduce(
-                (sum, project) => sum + project.size,
-                0
-              )}
-        selectedSize={projects
-          .filter((project) => selectedProjects.has(project.path))
-          .reduce((sum, project) => sum + project.size, 0)}
-      />
     </div>
   );
 }

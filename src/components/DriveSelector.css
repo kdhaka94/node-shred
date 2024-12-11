@@ -1,0 +1,92 @@
+.drive-selector {
+  background-color: #1f2937;
+  border-radius: 0.5rem;
+  padding: 1rem;
+}
+
+.drive-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1rem;
+}
+
+.drive-title {
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: #f3f4f6;
+  letter-spacing: -0.01em;
+}
+
+.drive-badge {
+  background-color: #3b82f6;
+  color: white;
+  padding: 0.25rem 0.75rem;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.drive-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.drive-item {
+  background-color: #374151;
+  border-radius: 0.5rem;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.drive-item:hover {
+  background-color: #4b5563;
+}
+
+.drive-item-content {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem;
+}
+
+.drive-checkbox {
+  width: 1.25rem;
+  height: 1.25rem;
+  border-radius: 0.25rem;
+  border: 1px solid #6b7280;
+  accent-color: #3b82f6;
+}
+
+.drive-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.drive-name {
+  color: #f3f4f6;
+  font-size: 0.875rem;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+
+.drive-path {
+  color: #9ca3af;
+  font-size: 0.75rem;
+  font-weight: 450;
+  letter-spacing: -0.01em;
+}
+
+/* Focus styles */
+.drive-checkbox:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.3);
+}
+
+.drive-item:focus-within {
+  outline: 2px solid #3b82f6;
+  outline-offset: 2px;
+} 
