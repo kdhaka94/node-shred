@@ -16,6 +16,30 @@ export interface DriveInfo {
   name: string;
 }
 
+export interface CleanupOption {
+  id: string;
+  label: string;
+  directories: string[];
+}
+
+const CLEANUP_OPTIONS: CleanupOption[] = [
+  {
+    id: 'node_modules',
+    label: 'node_modules only',
+    directories: ['node_modules']
+  },
+  {
+    id: 'build',
+    label: 'Build directories',
+    directories: ['node_modules', 'dist', 'build', '.next', 'out']
+  },
+  {
+    id: 'all_cache',
+    label: 'All cache and build',
+    directories: ['node_modules', 'dist', 'build', '.next', 'out', '.cache', '.parcel-cache', '.webpack']
+  }
+];
+
 function App() {
   const [projects, setProjects] = useState<ProjectInfo[]>([]);
   const [scanning, setScanning] = useState(false);
@@ -25,6 +49,7 @@ function App() {
   const [dateFilter, setDateFilter] = useState<number>(30);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [selectedCleanupOption, setSelectedCleanupOption] = useState<string>('node_modules');
 
   useEffect(() => {
     loadDrives();
@@ -62,10 +87,20 @@ function App() {
     setDeleting(true);
     setDeleteError(null);
     const failedDeletions: { path: string; error: string }[] = [];
+    const selectedOption = CLEANUP_OPTIONS.find(opt => opt.id === selectedCleanupOption);
+
+    if (!selectedOption) {
+      setDeleteError('Invalid cleanup option selected');
+      setDeleting(false);
+      return;
+    }
 
     for (const projectPath of selectedProjects) {
       try {
-        await invoke("delete_node_modules", { path: projectPath });
+        await invoke("delete_project_directories", { 
+          path: projectPath,
+          directories: selectedOption.directories
+        });
         // Remove from selected projects one by one as they succeed
         setSelectedProjects((prev) => {
           const next = new Set(prev);
@@ -182,6 +217,19 @@ function App() {
                 >
                   Deselect All
                 </button>
+
+                <select
+                  value={selectedCleanupOption}
+                  onChange={(e) => setSelectedCleanupOption(e.target.value)}
+                  className="cleanup-select"
+                  disabled={deleting}
+                >
+                  {CLEANUP_OPTIONS.map(option => (
+                    <option key={option.id} value={option.id}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
 
                 <button
                   onClick={deleteSelected}

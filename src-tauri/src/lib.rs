@@ -1,6 +1,6 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 use std::path::PathBuf;
-use std::time::{ UNIX_EPOCH};
+use std::time::{ UNIX_EPOCH };
 use walkdir::WalkDir;
 use serde::Serialize;
 
@@ -96,7 +96,13 @@ fn get_project_info(package_json_path: &std::path::Path) -> Option<ProjectInfo> 
     let project_dir = package_json_path.parent()?;
     let node_modules = project_dir.join("node_modules");
     
-    if !node_modules.exists() {
+    // Check for any of the common build/cache directories
+    let has_cleanable_dirs = [
+        "node_modules", "dist", "build", ".next", "out",
+        ".cache", ".parcel-cache", ".webpack"
+    ].iter().any(|dir| project_dir.join(dir).exists());
+    
+    if !has_cleanable_dirs {
         return None;
     }
     
@@ -108,7 +114,9 @@ fn get_project_info(package_json_path: &std::path::Path) -> Option<ProjectInfo> 
         .ok()?
         .as_secs();
         
-    let size = get_directory_size(&node_modules);
+    // Convert project_dir to PathBuf before passing to get_directory_size
+    let project_dir_buf = project_dir.to_path_buf();
+    let size = get_directory_size(&project_dir_buf);
     
     Some(ProjectInfo {
         path: project_dir.to_string_lossy().into_owned(),
@@ -128,10 +136,24 @@ fn get_directory_size(path: &PathBuf) -> u64 {
 }
 
 #[tauri::command]
-async fn delete_node_modules(path: &str) -> Result<(), String> {
-    let node_modules = PathBuf::from(path).join("node_modules");
-    std::fs::remove_dir_all(node_modules)
-        .map_err(|e| format!("Failed to delete node_modules: {}", e))
+async fn delete_project_directories(path: &str, directories: Vec<String>) -> Result<(), String> {
+    let project_path = PathBuf::from(path);
+    let mut errors = Vec::new();
+
+    for dir in directories {
+        let target_dir = project_path.join(&dir);
+        if target_dir.exists() {
+            if let Err(e) = std::fs::remove_dir_all(&target_dir) {
+                errors.push(format!("Failed to delete {}: {}", dir, e));
+            }
+        }
+    }
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join(", "))
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -140,7 +162,7 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .invoke_handler(tauri::generate_handler![
             scan_for_projects,
-            delete_node_modules,
+            delete_project_directories,
             get_drives
         ])
         .run(tauri::generate_context!())
