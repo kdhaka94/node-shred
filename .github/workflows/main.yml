@@ -24,8 +24,18 @@ jobs:
         with:
           node-version: 20
 
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
 
       - name: Install dependencies (ubuntu only)
         if: matrix.platform == 'ubuntu-20.04'
@@ -34,7 +44,10 @@ jobs:
           sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev libappindicator3-dev librsvg2-dev patchelf
 
       - name: Install frontend dependencies
-        run: npm install # or yarn install
+        run: bun install
+
+      - name: Build frontend
+        run: bun run build
 
       - name: Build the app
         uses: tauri-apps/tauri-action@v0
@@ -45,4 +58,8 @@ jobs:
           releaseName: 'App v__VERSION__'
           releaseBody: 'See the assets to download and install this version.'
           releaseDraft: true
-          prerelease: false 
+          prerelease: false
+          includeDebug: false
+          includeRelease: true
+          includeUpdaterJson: true
+          updaterJsonKeepUniversal: false 
