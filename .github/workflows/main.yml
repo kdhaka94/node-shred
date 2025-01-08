@@ -73,10 +73,18 @@ jobs:
             echo "version=0.0.0-$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
           fi
 
+      - name: Create key file
+        if: env.TAURI_PRIVATE_KEY
+        shell: bash
+        run: |
+          echo "${{ secrets.TAURI_PRIVATE_KEY }}" > tauri.key
+
       - name: Build the app
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
         with:
           tagName: v${{ steps.get_version.outputs.version }}
           releaseName: 'Node Shred v${{ steps.get_version.outputs.version }}'
