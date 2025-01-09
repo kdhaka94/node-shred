@@ -55,7 +55,12 @@ jobs:
             build-essential \
             libssl-dev \
             libxdo-dev \
-            pkg-config
+            pkg-config \
+            glib-2.0 \
+            libglib2.0-0 \
+            libglib2.0-dev \
+            libatk1.0-dev \
+            libcairo2-dev
 
       - name: Install frontend dependencies
         run: bun install
