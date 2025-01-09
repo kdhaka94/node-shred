@@ -46,7 +46,7 @@ function App() {
   const [selectedProjects, setSelectedProjects] = useState<Set<string>>(new Set());
   const [drives, setDrives] = useState<DriveInfo[]>([]);
   const [selectedDrives, setSelectedDrives] = useState<Set<string>>(new Set());
-  const [dateFilter, setDateFilter] = useState<number>(30);
+  const [dateFilter, setDateFilter] = useState<number | 'all'>('all');
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [selectedCleanupOption, setSelectedCleanupOption] = useState<string>('node_modules');
@@ -135,7 +135,7 @@ function App() {
   };
 
   const filteredProjects = projects.filter(
-    (project) => project.last_modified * 1000 < Date.now() - dateFilter * 24 * 60 * 60 * 1000
+    (project) => dateFilter === 'all' || project.last_modified * 1000 < Date.now() - dateFilter * 24 * 60 * 60 * 1000
   );
 
   return (
@@ -184,19 +184,20 @@ function App() {
 
                 <div className="date-filter">
                   <label htmlFor="dateFilter" className="date-filter-label">
-                    Show projects older than
+                    Show projects
                   </label>
                   <select
                     id="dateFilter"
                     value={dateFilter}
-                    onChange={(e) => setDateFilter(Number(e.target.value))}
+                    onChange={(e) => setDateFilter(e.target.value === 'all' ? 'all' : Number(e.target.value))}
                     className="date-filter-select"
                   >
-                    <option value={7}>7 days</option>
-                    <option value={30}>30 days</option>
-                    <option value={90}>90 days</option>
-                    <option value={180}>180 days</option>
-                    <option value={365}>1 year</option>
+                    <option value="all">All projects</option>
+                    <option value={7}>Older than 7 days</option>
+                    <option value={30}>Older than 30 days</option>
+                    <option value={90}>Older than 90 days</option>
+                    <option value={180}>Older than 180 days</option>
+                    <option value={365}>Older than 1 year</option>
                   </select>
                 </div>
               </div>

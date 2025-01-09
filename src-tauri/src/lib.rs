@@ -94,18 +94,35 @@ async fn scan_for_projects(root_path: &str) -> Result<Vec<ProjectInfo>, String> 
 
 fn get_project_info(package_json_path: &std::path::Path) -> Option<ProjectInfo> {
     let project_dir = package_json_path.parent()?;
-    let node_modules = project_dir.join("node_modules");
     
     // Check for any of the common build/cache directories
-    let has_cleanable_dirs = [
+    let cleanable_dirs = [
         "node_modules", "dist", "build", ".next", "out",
         ".cache", ".parcel-cache", ".webpack"
-    ].iter().any(|dir| project_dir.join(dir).exists());
+    ];
+    
+    let mut total_size = 0;
+    let mut has_cleanable_dirs = false;
+    
+    for dir in cleanable_dirs.iter() {
+        let dir_path = project_dir.join(dir);
+        if dir_path.exists() {
+            has_cleanable_dirs = true;
+            if let Ok(metadata) = dir_path.metadata() {
+                if let Ok(last_modified) = metadata.modified() {
+                    if let Ok(_duration) = last_modified.duration_since(UNIX_EPOCH) {
+                        total_size += get_directory_size(&dir_path);
+                    }
+                }
+            }
+        }
+    }
     
     if !has_cleanable_dirs {
         return None;
     }
     
+    let node_modules = project_dir.join("node_modules");
     let metadata = node_modules.metadata().ok()?;
     let last_modified = metadata
         .modified()
@@ -113,15 +130,11 @@ fn get_project_info(package_json_path: &std::path::Path) -> Option<ProjectInfo> 
         .duration_since(UNIX_EPOCH)
         .ok()?
         .as_secs();
-        
-    // Convert project_dir to PathBuf before passing to get_directory_size
-    let project_dir_buf = project_dir.to_path_buf();
-    let size = get_directory_size(&project_dir_buf);
     
     Some(ProjectInfo {
         path: project_dir.to_string_lossy().into_owned(),
         last_modified,
-        size,
+        size: total_size,
     })
 }
 
@@ -143,6 +156,7 @@ async fn delete_project_directories(path: &str, directories: Vec<String>) -> Res
     for dir in directories {
         let target_dir = project_path.join(&dir);
         if target_dir.exists() {
+            println!("Attempting to delete: {}", target_dir.display());
             if let Err(e) = std::fs::remove_dir_all(&target_dir) {
                 errors.push(format!("Failed to delete {}: {}", dir, e));
             }

@@ -44,6 +44,8 @@ export function ProjectList({
 
   const getDaysAgo = (timestamp: number) => {
     const days = Math.floor((Date.now() - timestamp * 1000) / (1000 * 60 * 60 * 24));
+    if (days === 0) return 'Today';
+    if (days === 1) return 'Yesterday';
     return `${days} days old`;
   };
 
