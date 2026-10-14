@@ -2,7 +2,17 @@
 
 NodeShred is a powerful desktop application built with Tauri and React that helps you reclaim disk space by cleaning up unused node_modules and build directories from your projects.
 
-![NodeShred Screenshot](./public/screenshot.png)
+![NodeShred project cleaner](./public/screenshot.png)
+
+*Project cleaner with example projects, per-folder selection, and a storage breakdown.*
+
+![Files and downloads cleanup](./public/files-cleanup.png)
+
+*Files & downloads with example archives, media, installers, and documents.*
+
+![Cleanup review](./public/cleanup-review.png)
+
+*Full paths and selected folders are shown before confirming permanent deletion. Screenshots use demonstration data.*
 
 ## Features
 
@@ -151,3 +161,9 @@ bash scripts/install-macos.sh
 ```
 
 The helper checks Apple Command Line Tools, installs missing Bun/Rust through Homebrew when available, builds the app for your Mac, and installs it in `~/Applications/NodeShred.app`. An existing app at that location is backed up before replacement. If Command Line Tools or prerequisites need manual installation, follow the printed instructions and rerun the helper. The macOS installer has been syntax-checked; the native macOS build still needs validation on a Mac.
+
+## Automated release builds
+
+Pushing to `release` runs the Release workflow: validation first, then macOS universal (Apple Silicon and Intel), Windows, and Linux DEB/AppImage builds. Installers are uploaded to a draft and published as a prerelease only after every platform succeeds. Branch builds use tags such as `preview-v0.2.0-<commit>`, so each build has its own download page. The same workflow can be run manually in GitHub Actions.
+
+To publish a stable release, keep the versions in `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json` aligned, then push a matching tag such as `v0.2.0`. macOS and Windows installers currently have no distribution signing certificates, and macOS builds are not notarized.

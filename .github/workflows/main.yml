@@ -1,135 +1,169 @@
 name: Release
+
 on:
   push:
-    tags:
-      - 'v*'
-    branches:
-      - master
+    branches: [master, release]
+    tags: ["v*"]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  release:
+  verify:
+    name: Validate release
+    runs-on: ubuntu-22.04
+    outputs:
+      tag: ${{ steps.metadata.outputs.tag }}
+      version: ${{ steps.metadata.outputs.version }}
+      prerelease: ${{ steps.metadata.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.11
+      - uses: dtolnay/rust-toolchain@1.85.1
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libssl-dev \
+            libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - name: Install frontend dependencies
+        run: bun install --frozen-lockfile
+      - name: Check frontend and native behavior
+        run: |
+          bun run test
+          bun run build
+          cargo test --locked --manifest-path src-tauri/Cargo.toml --lib
+      - name: Check UI behavior
+        run: |
+          bunx playwright install --with-deps chromium
+          bun run test:ui
+      - name: Validate versions and identify this release
+        id: metadata
+        shell: bash
+        run: |
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          const version = JSON.parse(fs.readFileSync('package.json')).version;
+          const tauriVersion = JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json')).version;
+          const cargo = fs.readFileSync('src-tauri/Cargo.toml', 'utf8').split(/\n\[/)[0];
+          const cargoVersion = cargo.match(/^version\s*=\s*"([^"]+)"/m)?.[1];
+          if (version !== tauriVersion || version !== cargoVersion) throw new Error('Package, Tauri, and Cargo versions must match');
+          const stable = process.env.GITHUB_REF.startsWith('refs/tags/');
+          const tag = stable ? process.env.GITHUB_REF_NAME : `preview-v${version}-${process.env.GITHUB_SHA.slice(0, 7)}`;
+          if (stable && tag !== `v${version}`) throw new Error(`Release tag must be v${version}`);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\ntag=${tag}\nprerelease=${!stable}\n`);
+          JS
+
+  prepare:
+    name: Prepare draft release
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create draft for installer uploads
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.verify.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.verify.outputs.version }}
+          PRERELEASE: ${{ needs.verify.outputs.prerelease }}
+        shell: bash
+        run: |
+          cat > "$RUNNER_TEMP/release-notes.md" <<'NOTES'
+          Selective cleanup for JavaScript, Python, Rust, and PHP projects, plus individual files and downloads.
+
+          Includes a redesigned storage dashboard, per-folder selection, cleanup presets, filtering, and exact-path review before permanent deletion.
+
+          Download the universal macOS DMG (Apple Silicon and Intel), Windows installer, or Linux DEB/AppImage below. macOS and Windows builds are not signed with distribution certificates; macOS builds are not notarized. No signing secrets are required for this preview.
+          NOTES
+          flags=(--draft --target "$GITHUB_SHA" --title "NodeShred $RELEASE_VERSION" --notes-file "$RUNNER_TEMP/release-notes.md")
+          if [ "$PRERELEASE" = true ]; then flags+=(--prerelease); fi
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" "${flags[@]}"
+          fi
+
+  build:
+    name: Build ${{ matrix.name }} installers
+    needs: [verify, prepare]
     permissions:
       contents: write
     strategy:
       fail-fast: false
       matrix:
-        platform: [macos-latest, ubuntu-22.04, windows-latest]
+        include:
+          - name: macOS universal
+            platform: macos-latest
+            args: --target universal-apple-darwin
+            rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
+          - name: Windows
+            platform: windows-latest
+            args: ""
+            rust_targets: ""
+          - name: Linux
+            platform: ubuntu-22.04
+            args: --bundles deb,appimage
+            rust_targets: ""
     runs-on: ${{ matrix.platform }}
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
-          fetch-depth: 0
-
-      - name: Install Node.js
-        uses: actions/setup-node@v4
+          node-version: 24
+      - uses: oven-sh/setup-bun@v2
         with:
-          node-version: 20
-
-      - name: Install Bun
-        uses: oven-sh/setup-bun@v1
+          bun-version: 1.3.11
+      - uses: dtolnay/rust-toolchain@1.85.1
         with:
-          bun-version: latest
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Rust cache
-        uses: swatinem/rust-cache@v2
+          targets: ${{ matrix.rust_targets }}
+      - uses: swatinem/rust-cache@v2
         with:
-          workspaces: './src-tauri -> target'
-
-      - name: Install dependencies (ubuntu only)
-        if: matrix.platform == 'ubuntu-22.04'
+          workspaces: src-tauri -> target
+      - name: Install Linux packaging dependencies
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          
-          # First install glib2.0 specifically
-          sudo apt-get install -y glib-2.0 libglib2.0-dev
-
-          # Debug glib installation
-          echo "Checking glib installation..."
-          dpkg -l | grep glib
-          
-          # Install core dependencies
-          sudo apt-get install -y \
-            build-essential \
-            curl \
-            wget \
-            file \
-            pkg-config \
-            libssl-dev
-
-          # Install GTK and WebKit dependencies
-          sudo apt-get install -y \
-            libgtk-3-dev \
-            libwebkit2gtk-4.0-dev \
-            libwebkit2gtk-4.1-dev \
-            libjavascriptcoregtk-4.0-dev \
-            libjavascriptcoregtk-4.1-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev
-
-          # Install GLib and related dependencies
-          sudo apt-get install -y \
-            libglib2.0-dev \
-            libglib2.0-dev-bin \
-            libglib2.0-0 \
-            libcairo2-dev \
-            libpango1.0-dev \
-            libatk1.0-dev \
-            libgdk-pixbuf2.0-dev \
-            libsoup2.4-dev
-
-          # Set pkg-config path
-          echo "PKG_CONFIG_PATH=/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig:/usr/lib/pkgconfig" >> $GITHUB_ENV
-          
-          # Debug package installation
-          echo "Checking installed packages..."
-          dpkg -l | grep -E 'gtk|webkit|javascript|glib'
-          
-          # Debug pkg-config setup
-          echo "Debugging pkg-config..."
-          pkg-config --version
-          echo "Checking for JavaScriptCore GTK..."
-          pkg-config --list-all | grep -i javascript
-          pkg-config --modversion javascriptcoregtk-4.1 || true
-          find /usr -name "javascriptcoregtk-4.1.pc" 2>/dev/null || true
-          echo "PKG_CONFIG_PATH=$PKG_CONFIG_PATH"
-
+          sudo apt-get install -y build-essential pkg-config libssl-dev \
+            libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
       - name: Install frontend dependencies
-        run: bun install
-
-      - name: Build frontend
-        run: bun run build
-
-      - name: Get version
-        id: get_version
-        shell: bash
-        run: |
-          if [[ $GITHUB_REF == refs/tags/* ]]; then
-            echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
-          else
-            echo "version=0.0.0-$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Build the app
+        run: bun install --frozen-lockfile
+      - name: Build and upload installers to draft release
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PKG_CONFIG_PATH: /usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig:/usr/lib/pkgconfig
         with:
-          tagName: v${{ steps.get_version.outputs.version }}
-          releaseName: 'Node Shred v${{ steps.get_version.outputs.version }}'
-          releaseBody: |
-            See the assets to download and install this version.
-            
-            Changes in this version:
-            ${{ github.event.head_commit.message }}
-          releaseDraft: false
-          prerelease: false
+          tagName: ${{ needs.verify.outputs.tag }}
+          releaseName: NodeShred ${{ needs.verify.outputs.version }}
+          releaseDraft: true
+          prerelease: ${{ needs.verify.outputs.prerelease == 'true' }}
           includeDebug: false
           includeRelease: true
-          includeUpdaterJson: false 
+          includeUpdaterJson: false
+          args: ${{ matrix.args }} -- --locked
+
+  publish:
+    name: Publish completed release
+    needs: [verify, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Publish after every platform succeeds
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.verify.outputs.tag }}
+          PRERELEASE: ${{ needs.verify.outputs.prerelease }}
+        run: gh release edit "$RELEASE_TAG" --draft=false --prerelease="$PRERELEASE"
