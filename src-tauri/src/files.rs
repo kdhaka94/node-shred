@@ -1,3 +1,4 @@
+use crate::scan_policy::{self, ScanFeedback};
 use serde::Serialize;
 use std::{
     collections::{HashMap, HashSet},
@@ -25,6 +26,7 @@ pub struct FileInfo {
 }
 #[derive(Serialize)]
 pub struct FileReport {
+    pub feedback: ScanFeedback,
     pub files: Vec<FileInfo>,
     pub warnings: Vec<String>,
 }
@@ -59,7 +61,10 @@ pub fn scan(root: &str, recursive: bool, registry: &FileRegistry) -> Result<File
     if !root.is_dir() {
         return Err("Choose a folder to scan".into());
     }
+    scan_policy::check_root(&root)?;
+    let system_skips = std::cell::Cell::new(0);
     let mut report = FileReport {
+        feedback: ScanFeedback::default(),
         files: Vec::new(),
         warnings: Vec::new(),
     };
@@ -71,6 +76,10 @@ pub fn scan(root: &str, recursive: bool, registry: &FileRegistry) -> Result<File
         .follow_links(false)
         .into_iter()
         .filter_entry(|e| {
+            if cfg!(target_os = "macos") && scan_policy::skip_macos_location(e.path()) {
+                system_skips.set(system_skips.get() + 1);
+                return false;
+            }
             !e.file_name().to_string_lossy().starts_with('.')
                 && !["node_modules", "target", "vendor", "venv"]
                     .contains(&e.file_name().to_string_lossy().as_ref())
@@ -81,7 +90,10 @@ pub fn scan(root: &str, recursive: bool, registry: &FileRegistry) -> Result<File
                 let metadata = match entry.metadata() {
                     Ok(m) => m,
                     Err(e) => {
-                        if report.warnings.len() < 50 {
+                        if !e.io_error().is_some_and(|error| {
+                            report.feedback.permission_skip(error, entry.path())
+                        }) && report.warnings.len() < 50
+                        {
                             report.warnings.push(e.to_string());
                         }
                         continue;
@@ -117,10 +129,20 @@ pub fn scan(root: &str, recursive: bool, registry: &FileRegistry) -> Result<File
                     break;
                 }
             }
-            Err(e) if report.warnings.len() < 50 => report.warnings.push(e.to_string()),
+            Err(e) => {
+                let denied = e.io_error().is_some_and(|error| {
+                    report
+                        .feedback
+                        .permission_skip(error, e.path().unwrap_or(&root))
+                });
+                if !denied && report.warnings.len() < 50 {
+                    report.warnings.push(e.to_string());
+                }
+            }
             _ => (),
         }
     }
+    report.feedback.skipped_system = system_skips.get();
     report.files.sort_by(|a, b| b.size.cmp(&a.size));
     Ok(report)
 }
@@ -168,6 +190,39 @@ pub fn cleanup(paths: Vec<String>, registry: &FileRegistry) -> Result<FileCleanu
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_children_are_skipped_but_an_unreadable_root_is_an_error() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let blocked = root.path().join("protected");
+        std::fs::create_dir(&blocked).unwrap();
+        std::fs::write(root.path().join("package.json"), "{}").unwrap();
+        std::fs::create_dir(root.path().join("dist")).unwrap();
+        std::fs::write(root.path().join("keep.txt"), "keep").unwrap();
+        std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let report = scan(
+            root.path().to_str().unwrap(),
+            true,
+            &FileRegistry::default(),
+        )
+        .unwrap();
+        std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(report.feedback.skipped_permissions, 1);
+        assert!(report.warnings.is_empty());
+        assert!(report.files.iter().any(|file| file.name == "keep.txt"));
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o000)).unwrap();
+        let error = scan(
+            root.path().to_str().unwrap(),
+            true,
+            &FileRegistry::default(),
+        )
+        .err()
+        .unwrap();
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(error.contains("Cannot read the selected folder"));
+    }
+
     use super::*;
     #[test]
     fn lists_files_by_type_and_deletes_only_reviewed_files() {

@@ -1,8 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { CleanupReview } from "./components/CleanupReview";
+import { ScanFeedbackBanner } from "./components/ScanFeedbackBanner";
 import { Icon } from "./components/Icon";
 import {
   CATEGORIES,
+  activePlanEntries,
+  artifactPath,
+  emptyScanFeedback,
+  mergeScanFeedback,
   chosenDirectories,
   formatSize,
   matchesFilters,
@@ -10,6 +16,8 @@ import {
   ageLabel,
 } from "./storage";
 import type {
+  CleanupPlan,
+  ScanFeedback,
   ProjectInfo,
   FileInfo,
   DriveInfo,
@@ -19,10 +27,6 @@ import "./App.css";
 export type { ProjectInfo, DriveInfo } from "./storage";
 
 type Mode = "projects" | "files";
-interface Plan {
-  mode: Mode;
-  entries: { path: string; names: string[]; size: number }[];
-}
 const PRESETS = [
   { id: "cache", label: "Caches only", categories: ["cache"] },
   { id: "build", label: "Fresh build", categories: ["cache", "build"] },
@@ -57,15 +61,36 @@ function App() {
   const [sort, setSort] = useState("size");
   const [scanning, setScanning] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const [scanned, setScanned] = useState(false);
+  const [lastScan, setLastScan] = useState<
+    Partial<Record<Mode, { key: string; roots: string[]; complete: boolean }>>
+  >({});
+  const [feedback, setFeedback] = useState(emptyScanFeedback);
+  const [scanMessages, setScanMessages] = useState<
+    Partial<Record<Mode, { feedback: ScanFeedback; warnings: string[] }>>
+  >({});
+  const [choosing, setChoosing] = useState(false);
+  const [openingPath, setOpeningPath] = useState<string | null>(null);
+  const [navigationError, setNavigationError] = useState("");
+  const selectionBox = useRef<HTMLInputElement>(null);
+  const scanKey = JSON.stringify(
+    mode === "projects"
+      ? [[...roots].sort(), depth, hidden]
+      : [fileRoot.trim(), recursive],
+  );
+  const scanned = !!lastScan[mode]?.complete;
+  const resultsStale = scanned && lastScan[mode]?.key !== scanKey;
+  const fileManager = /Mac/i.test(navigator.platform)
+    ? "Finder"
+    : /Win/i.test(navigator.platform)
+      ? "Explorer"
+      : "file manager";
   const [warnings, setWarnings] = useState<string[]>([]);
   const [notice, setNotice] = useState("");
   const [freed, setFreed] = useState(0);
   const [progress, setProgress] = useState("");
-  const [plan, setPlan] = useState<Plan | null>(null);
+  const [plan, setPlan] = useState<CleanupPlan | null>(null);
   const [acknowledged, setAcknowledged] = useState(false);
-  const dialog = useRef<HTMLDialogElement>(null);
-  const busy = scanning || deleting;
+  const busy = scanning || deleting || choosing;
   const desktop =
     typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -73,20 +98,23 @@ function App() {
     if (!desktop) return;
     invoke<DriveInfo[]>("get_drives")
       .then((items) => {
-        setLocations(items);
+        setLocations((previous) => [
+          ...previous,
+          ...items.filter(
+            (item) => !previous.some((location) => location.path === item.path),
+          ),
+        ]);
         if (items[0]) {
-          setRoots(new Set([items[0].path]));
-          setFileRoot(`${items[0].path.replace(/[\\/]$/, "")}/Downloads`);
+          setRoots((previous) =>
+            previous.size ? previous : new Set([items[0].path]),
+          );
+          setFileRoot(
+            (previous) => previous || artifactPath(items[0].path, "Downloads"),
+          );
         }
       })
       .catch((error) => setWarnings([errorText(error)]));
   }, [desktop]);
-  useEffect(() => {
-    if (plan && dialog.current && !dialog.current.open)
-      dialog.current.showModal();
-    if (!plan) dialog.current?.close();
-  }, [plan]);
-
   const items = mode === "projects" ? projects : files;
   const visible = useMemo(
     () =>
@@ -121,6 +149,12 @@ function App() {
   const allVisibleSelected =
     visibleEligible.length > 0 &&
     visibleEligible.every((item) => selected.has(item.path));
+  useEffect(() => {
+    if (selectionBox.current)
+      selectionBox.current.indeterminate =
+        !allVisibleSelected &&
+        visibleEligible.some((item) => selected.has(item.path));
+  }, [allVisibleSelected, visibleEligible, selected]);
   const hiddenSelection = selectedItems.filter(
     (item) => !visible.some((v) => v.path === item.path),
   ).length;
@@ -167,40 +201,94 @@ function App() {
     setSelected(new Set());
     setKind("all");
     setSearch("");
-    setScanned(false);
-    setWarnings([]);
+    setWarnings(scanMessages[next]?.warnings || []);
+    setFeedback(scanMessages[next]?.feedback || emptyScanFeedback());
+    setNavigationError("");
     setNotice("");
   }
-  function addLocation(event: React.FormEvent) {
+  function includeLocations(paths: string[]) {
+    setLocations((previous) => [
+      ...previous,
+      ...paths
+        .filter((path) => !previous.some((location) => location.path === path))
+        .map((path) => ({ path, name: projectName(path) })),
+    ]);
+    setRoots((previous) => new Set([...previous, ...paths]));
+  }
+  async function addLocation(event: React.FormEvent) {
     event.preventDefault();
-    const path = folder.trim();
-    if (!path) return;
-    if (!locations.some((location) => location.path === path))
-      setLocations((previous) => [
-        ...previous,
-        { path, name: projectName(path) },
-      ]);
-    setRoots((previous) => new Set([...previous, path]));
-    setFolder("");
+    if (!folder.trim()) return;
+    setChoosing(true);
+    setNavigationError("");
+    try {
+      const path = await invoke<string>("validate_scan_folder", {
+        path: folder.trim(),
+      });
+      includeLocations([path]);
+      setFolder("");
+    } catch (error) {
+      setNavigationError(errorText(error));
+    } finally {
+      setChoosing(false);
+    }
+  }
+  async function chooseFolders() {
+    setChoosing(true);
+    setNavigationError("");
+    try {
+      const paths = await invoke<string[]>("select_folders", {
+        multiple: mode === "projects",
+        defaultPath: mode === "files" ? fileRoot : [...roots][0] || null,
+      });
+      if (mode === "projects") includeLocations(paths);
+      else if (paths[0]) setFileRoot(paths[0]);
+    } catch (error) {
+      setNavigationError(errorText(error));
+    } finally {
+      setChoosing(false);
+    }
+  }
+  async function openLocation(path: string, file = false) {
+    setOpeningPath(path);
+    setNavigationError("");
+    try {
+      await invoke(file ? "reveal_file" : "open_folder", { path });
+    } catch (error) {
+      setNavigationError(errorText(error));
+    } finally {
+      setOpeningPath(null);
+    }
   }
   async function scan() {
     setScanning(true);
-    setScanned(false);
+    setLastScan((previous) => ({
+      ...previous,
+      [mode]: {
+        key: scanKey,
+        roots: mode === "projects" ? [...roots] : [fileRoot.trim()],
+        complete: false,
+      },
+    }));
+    setFeedback(emptyScanFeedback());
+    setNavigationError("");
     setSelected(new Set());
     setOverrides({});
     setWarnings([]);
     setNotice("");
     const errors: string[] = [];
+    let coverage = emptyScanFeedback();
     try {
       if (mode === "files") {
         setFiles([]);
         setProgress("Reading your folder…");
-        const report = await invoke<{ files: FileInfo[]; warnings: string[] }>(
-          "scan_folder_files",
-          { rootPath: fileRoot.trim(), recursive },
-        );
+        const report = await invoke<{
+          files: FileInfo[];
+          warnings: string[];
+          feedback?: ScanFeedback;
+        }>("scan_folder_files", { rootPath: fileRoot.trim(), recursive });
         setFiles(report.files);
         errors.push(...report.warnings);
+        coverage = mergeScanFeedback(coverage, report.feedback);
       } else {
         setProjects([]);
         const found = new Map<string, ProjectInfo>();
@@ -211,6 +299,7 @@ function App() {
             const report = await invoke<{
               projects: ProjectInfo[];
               warnings: string[];
+              feedback?: ScanFeedback;
             }>("scan_for_projects", {
               rootPath: root,
               maxDepth: depth,
@@ -218,6 +307,7 @@ function App() {
             });
             report.projects.forEach((p) => found.set(p.path, p));
             errors.push(...report.warnings);
+            coverage = mergeScanFeedback(coverage, report.feedback);
           } catch (error) {
             errors.push(`${root}: ${errorText(error)}`);
           }
@@ -229,7 +319,19 @@ function App() {
     } finally {
       setWarnings(errors);
       setScanning(false);
-      setScanned(true);
+      setLastScan((previous) => ({
+        ...previous,
+        [mode]: {
+          key: scanKey,
+          roots: mode === "projects" ? [...roots] : [fileRoot.trim()],
+          complete: true,
+        },
+      }));
+      setFeedback(coverage);
+      setScanMessages((previous) => ({
+        ...previous,
+        [mode]: { feedback: coverage, warnings: errors },
+      }));
       setProgress("");
     }
   }
@@ -243,12 +345,16 @@ function App() {
     }));
   }
   function review() {
+    if (resultsStale) return;
+    setNavigationError("");
     setAcknowledged(false);
     setPlan({
       mode,
       entries: selectedItems.map((item) => ({
         path: item.path,
         size: eligibleSize(item),
+        included: true,
+        directories: "directories" in item ? item.directories : undefined,
         names:
           "directories" in item
             ? directoryChoices(item).map((d) => d.name)
@@ -257,7 +363,9 @@ function App() {
     });
   }
   async function performCleanup() {
-    if (!plan || !acknowledged) return;
+    if (!plan || !acknowledged || resultsStale) return;
+    const entries = activePlanEntries(plan);
+    if (!entries.length) return;
     setDeleting(true);
     setNotice("");
     const errors: string[] = [];
@@ -270,10 +378,10 @@ function App() {
           removed: string[];
           bytes_freed: number;
           errors: string[];
-        }>("delete_selected_files", { paths: plan.entries.map((e) => e.path) });
+        }>("delete_selected_files", { paths: entries.map((e) => e.path) });
         const removed = new Set(result.removed);
         setFiles((previous) => previous.filter((f) => !removed.has(f.path)));
-        plan.entries.forEach((e) => {
+        entries.forEach((e) => {
           if (!removed.has(e.path)) failed.add(e.path);
         });
         bytes = result.bytes_freed;
@@ -281,8 +389,8 @@ function App() {
         errors.push(...result.errors);
       } else {
         let index = 0;
-        for (const entry of plan.entries) {
-          setProgress(`Cleaning project ${++index} of ${plan.entries.length}…`);
+        for (const entry of entries) {
+          setProgress(`Cleaning project ${++index} of ${entries.length}…`);
           try {
             const result = await invoke<{
               removed: DirectoryInfo[];
@@ -319,7 +427,7 @@ function App() {
           `Cleanup complete. Removed ${count} ${plan.mode === "files" ? "file" : "folder"}${count === 1 ? "" : "s"} · ${formatSize(bytes)} of file data cleared.`,
         );
     } catch (error) {
-      plan.entries.forEach((e) => failed.add(e.path));
+      entries.forEach((e) => failed.add(e.path));
       errors.push(errorText(error));
     } finally {
       setWarnings(errors);
@@ -371,46 +479,96 @@ function App() {
               ? "Choose where to look for projects."
               : "Review individual files before removing them."}
           </p>
+          <button
+            className="button secondary choose-folder"
+            onClick={chooseFolders}
+            disabled={busy || !desktop}
+          >
+            <Icon name="folder" />
+            {choosing
+              ? "Choosing…"
+              : mode === "projects"
+                ? "Choose folders…"
+                : "Choose folder…"}
+          </button>
           {mode === "projects" ? (
             <>
               <div className="location-list">
                 {locations.map((location) => (
-                  <label
+                  <div
                     key={location.path}
                     className="location"
                     title={location.path}
                   >
-                    <input
-                      type="checkbox"
-                      checked={roots.has(location.path)}
-                      onChange={() => toggle(location.path, setRoots)}
-                      disabled={busy}
-                    />
-                    <span>
-                      <strong>{location.name}</strong>
-                      <small>{location.path}</small>
-                    </span>
-                  </label>
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={roots.has(location.path)}
+                        onChange={() => toggle(location.path, setRoots)}
+                        disabled={busy}
+                      />
+                      <span>
+                        <strong>{location.name}</strong>
+                        <small>{location.path}</small>
+                      </span>
+                    </label>
+                    <div className="location-actions">
+                      <button
+                        className="folder-link"
+                        aria-label={`Open ${location.name} in ${fileManager}`}
+                        disabled={busy || openingPath === location.path}
+                        onClick={() => openLocation(location.path)}
+                      >
+                        <Icon name="external" />
+                        Open
+                      </button>
+                      <button
+                        className="remove-location"
+                        aria-label={`Remove scan location ${location.name}`}
+                        disabled={busy}
+                        onClick={() => {
+                          setLocations((previous) =>
+                            previous.filter(
+                              (item) => item.path !== location.path,
+                            ),
+                          );
+                          setRoots(
+                            (previous) =>
+                              new Set(
+                                [...previous].filter(
+                                  (path) => path !== location.path,
+                                ),
+                              ),
+                          );
+                        }}
+                      >
+                        <Icon name="close" />
+                      </button>
+                    </div>
+                  </div>
                 ))}
               </div>
-              <form onSubmit={addLocation} className="folder-form">
-                <label className="sr-only" htmlFor="folder">
-                  Add a project folder path
-                </label>
-                <input
-                  id="folder"
-                  placeholder="Paste a folder path…"
-                  value={folder}
-                  onChange={(e) => setFolder(e.target.value)}
-                  disabled={busy}
-                />
-                <button
-                  aria-label="Add folder"
-                  disabled={busy || !folder.trim()}
-                >
-                  <Icon name="plus" />
-                </button>
-              </form>
+              <details className="manual-path">
+                <summary>Enter a folder path</summary>
+                <form onSubmit={addLocation} className="folder-form">
+                  <label className="sr-only" htmlFor="folder">
+                    Add a project folder path
+                  </label>
+                  <input
+                    id="folder"
+                    placeholder="Paste a folder path…"
+                    value={folder}
+                    onChange={(e) => setFolder(e.target.value)}
+                    disabled={busy}
+                  />
+                  <button
+                    aria-label="Add folder"
+                    disabled={busy || !folder.trim()}
+                  >
+                    <Icon name="plus" />
+                  </button>
+                </form>
+              </details>
             </>
           ) : (
             <>
@@ -425,6 +583,19 @@ function App() {
                 onChange={(e) => setFileRoot(e.target.value)}
                 disabled={busy}
               />
+              <button
+                className="folder-link"
+                onClick={() => openLocation(fileRoot)}
+                disabled={
+                  busy ||
+                  !desktop ||
+                  !fileRoot.trim() ||
+                  openingPath === fileRoot
+                }
+              >
+                <Icon name="external" />
+                Open in {fileManager}
+              </button>
               <label className="check-option">
                 <input
                   type="checkbox"
@@ -533,8 +704,43 @@ function App() {
               </button>
             </div>
           )}
+          {navigationError && !plan && (
+            <div className="banner warning" role="alert">
+              {navigationError}
+              <button
+                aria-label="Dismiss folder error"
+                onClick={() => setNavigationError("")}
+              >
+                <Icon name="close" />
+              </button>
+            </div>
+          )}
+          <ScanFeedbackBanner feedback={feedback} />
+          {resultsStale && (
+            <div className="banner info" role="status">
+              Scan locations or settings changed. These results are from your
+              previous scan. Scan again before cleanup.
+            </div>
+          )}
+          {lastScan[mode]?.complete && (
+            <details className="scanned-locations">
+              <summary>Scanned locations</summary>
+              {lastScan[mode]?.roots.map((path) => (
+                <div key={path}>
+                  <code className="full-path">{path}</code>
+                  <button
+                    className="folder-link"
+                    onClick={() => openLocation(path)}
+                    disabled={busy || openingPath === path}
+                  >
+                    Open in {fileManager}
+                  </button>
+                </div>
+              ))}
+            </details>
+          )}
           {warnings.length > 0 && (
-            <details className="banner warning" open>
+            <details className="banner warning" open role="alert">
               <summary>
                 <Icon name="warning" />
                 {warnings.length}{" "}
@@ -583,7 +789,7 @@ function App() {
             <section className="results-panel">
               <div className="panel-heading">
                 <div>
-                  <h2>
+                  <h2 tabIndex={-1}>
                     {mode === "projects" ? "Your projects" : "Your files"}{" "}
                     <span className="count-badge">{visible.length}</span>
                   </h2>
@@ -670,6 +876,7 @@ function App() {
                 <label>
                   <input
                     type="checkbox"
+                    ref={selectionBox}
                     aria-label="Select all visible items"
                     checked={allVisibleSelected}
                     disabled={busy || !visibleEligible.length}
@@ -726,7 +933,9 @@ function App() {
                       {items.length
                         ? "Nothing matches these filters"
                         : scanned
-                          ? "Nothing to clean here"
+                          ? warnings.length
+                            ? "Check the scan information"
+                            : "Nothing to clean here"
                           : "A fresh start is a scan away"}
                     </h3>
                     <p>
@@ -780,6 +989,14 @@ function App() {
                               <span className="type-badge">{item.kind}</span>
                             </div>
                             <p title={item.path}>{item.path}</p>
+                            <button
+                              className="folder-link"
+                              disabled={busy || openingPath === item.path}
+                              onClick={() => openLocation(item.path, !project)}
+                            >
+                              <Icon name="external" />
+                              {project ? "Open" : "Show"} in {fileManager}
+                            </button>
                             <span className="item-age">
                               <Icon name="clock" />
                               {ageLabel(item.last_modified)}
@@ -809,37 +1026,61 @@ function App() {
                         {project && expanded.has(item.path) && (
                           <div className="directory-list">
                             {project.directories.map((directory) => (
-                              <label
+                              <div
                                 key={directory.name}
                                 className="directory-row"
                               >
-                                <input
-                                  type="checkbox"
-                                  checked={choices.some(
-                                    (d) => d.name === directory.name,
-                                  )}
-                                  onChange={() =>
-                                    toggleDirectory(project, directory.name)
-                                  }
-                                  disabled={busy}
-                                />
-                                <span
-                                  className={`category-dot ${directory.category}`}
-                                />
-                                <code>{directory.name}</code>
-                                <span className="muted">
-                                  {directory.category}
-                                </span>
-                                <strong>
-                                  {!directory.complete && "≥ "}
-                                  {formatSize(directory.size)}
-                                </strong>
-                                {!directory.complete && (
-                                  <span title="Some files were unreadable. Size is a lower estimate.">
-                                    <Icon name="warning" />
+                                <label>
+                                  <input
+                                    type="checkbox"
+                                    checked={choices.some(
+                                      (d) => d.name === directory.name,
+                                    )}
+                                    onChange={() =>
+                                      toggleDirectory(project, directory.name)
+                                    }
+                                    disabled={busy}
+                                  />
+                                  <span
+                                    className={`category-dot ${directory.category}`}
+                                  />
+                                  <code>{directory.name}</code>
+                                  <span className="muted">
+                                    {directory.category}
                                   </span>
-                                )}
-                              </label>
+                                  <strong>
+                                    {!directory.complete && "≥ "}
+                                    {formatSize(directory.size)}
+                                  </strong>
+                                  {!directory.complete && (
+                                    <span title="Some files were unreadable. Size is a lower estimate.">
+                                      <Icon name="warning" />
+                                    </span>
+                                  )}
+                                </label>
+                                <code className="full-path">
+                                  {artifactPath(project.path, directory.name)}
+                                </code>
+                                <button
+                                  className="folder-link"
+                                  disabled={
+                                    busy ||
+                                    openingPath ===
+                                      artifactPath(project.path, directory.name)
+                                  }
+                                  onClick={() =>
+                                    openLocation(
+                                      artifactPath(
+                                        project.path,
+                                        directory.name,
+                                      ),
+                                    )
+                                  }
+                                >
+                                  <Icon name="external" />
+                                  Open in {fileManager}
+                                </button>
+                              </div>
                             ))}
                           </div>
                         )}
@@ -945,7 +1186,7 @@ function App() {
                 </p>
                 <button
                   className="button primary"
-                  disabled={busy || !selectedItems.length}
+                  disabled={busy || resultsStale || !selectedItems.length}
                   onClick={review}
                 >
                   <Icon name="trash" />
@@ -965,99 +1206,25 @@ function App() {
           </footer>
         </div>
       </main>
-      <dialog
-        ref={dialog}
-        className="review-dialog"
-        aria-labelledby="review-title"
-        onCancel={(event) => {
-          if (deleting) event.preventDefault();
-          else setPlan(null);
+      <CleanupReview
+        plan={plan}
+        deleting={deleting}
+        acknowledged={acknowledged}
+        progress={progress}
+        navigationError={navigationError}
+        fileManager={fileManager}
+        openingPath={openingPath}
+        onChange={setPlan}
+        onAcknowledge={setAcknowledged}
+        onClose={() => {
+          if (!deleting) {
+            setPlan(null);
+            setNavigationError("");
+          }
         }}
-      >
-        {plan && (
-          <>
-            <div className="dialog-header">
-              <span className="review-icon">
-                <Icon name="trash" />
-              </span>
-              <button
-                aria-label="Close cleanup review"
-                onClick={() => setPlan(null)}
-                disabled={deleting}
-              >
-                <Icon name="close" />
-              </button>
-            </div>
-            <p className="eyebrow accent">ONE LAST LOOK</p>
-            <h2 id="review-title">Review your cleanup</h2>
-            <p className="muted">
-              {plan.entries.length}{" "}
-              {plan.mode === "projects" ? "projects" : "files"} ·{" "}
-              {formatSize(plan.entries.reduce((sum, e) => sum + e.size, 0))}{" "}
-              estimated file data
-            </p>
-            <div className="review-list">
-              {plan.entries.map((entry) => (
-                <div key={entry.path}>
-                  <strong>{projectName(entry.path)}</strong>
-                  <p>{entry.path}</p>
-                  {entry.names.length > 0 && (
-                    <div className="review-tags">
-                      {entry.names.map((name) => (
-                        <code key={name}>{name}</code>
-                      ))}
-                    </div>
-                  )}
-                  <span>{formatSize(entry.size)}</span>
-                </div>
-              ))}
-            </div>
-            <div className="permanent-note">
-              <Icon name="warning" />
-              <p>
-                {plan.mode === "projects"
-                  ? "These folders will be permanently deleted. Packages need reinstalling and builds need regenerating. Check for anything you want to keep inside them."
-                  : "These files will be permanently deleted, not moved to Trash. Make sure you have a copy of anything you may need later."}
-              </p>
-            </div>
-            <label className="acknowledge">
-              <input
-                type="checkbox"
-                checked={acknowledged}
-                onChange={(e) => setAcknowledged(e.target.checked)}
-                disabled={deleting}
-              />
-              I’ve reviewed the paths and want to delete these items.
-            </label>
-            {deleting && (
-              <p className="muted small" role="status">
-                {progress || "Deleting selected files…"}
-              </p>
-            )}
-            <div className="dialog-actions">
-              <button
-                className="button secondary"
-                disabled={deleting}
-                onClick={() => setPlan(null)}
-              >
-                Keep my files
-              </button>
-              <button
-                className="button danger"
-                disabled={!acknowledged || deleting}
-                onClick={performCleanup}
-              >
-                {deleting ? (
-                  <span className="spinner" />
-                ) : (
-                  <Icon name="trash" />
-                )}
-                {deleting ? "Cleaning…" : "Delete selected items"}
-              </button>
-            </div>
-          </>
-        )}
-      </dialog>
+        onConfirm={performCleanup}
+        onOpen={openLocation}
+      />
     </div>
   );
 }

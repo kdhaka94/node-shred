@@ -1,3 +1,4 @@
+use crate::scan_policy::{self, ScanFeedback};
 use serde::Serialize;
 use std::{
     collections::HashSet,
@@ -25,6 +26,7 @@ pub struct ProjectInfo {
 }
 #[derive(Serialize, Debug)]
 pub struct ScanReport {
+    pub feedback: ScanFeedback,
     pub projects: Vec<ProjectInfo>,
     pub warnings: Vec<String>,
 }
@@ -194,7 +196,10 @@ pub fn scan(root: &str, max_depth: usize, include_hidden: bool) -> Result<ScanRe
     if !root.is_dir() {
         return Err("Choose a folder to scan".into());
     }
+    scan_policy::check_root(&root)?;
+    let system_skips = std::cell::Cell::new(0);
     let mut report = ScanReport {
+        feedback: ScanFeedback::default(),
         projects: Vec::new(),
         warnings: Vec::new(),
     };
@@ -230,6 +235,10 @@ pub fn scan(root: &str, max_depth: usize, include_hidden: bool) -> Result<ScanRe
             if entry.depth() == 0 {
                 return true;
             }
+            if cfg!(target_os = "macos") && scan_policy::skip_macos_location(entry.path()) {
+                system_skips.set(system_skips.get() + 1);
+                return false;
+            }
             let name = entry.file_name().to_string_lossy();
             !entry.file_type().is_symlink()
                 && !excluded.contains(&name.as_ref())
@@ -249,10 +258,20 @@ pub fn scan(root: &str, max_depth: usize, include_hidden: bool) -> Result<ScanRe
                     report.projects.push(project);
                 }
             }
-            Err(e) if report.warnings.len() < 50 => report.warnings.push(e.to_string()),
+            Err(e) => {
+                let denied = e.io_error().is_some_and(|error| {
+                    report
+                        .feedback
+                        .permission_skip(error, e.path().unwrap_or(&root))
+                });
+                if !denied && report.warnings.len() < 50 {
+                    report.warnings.push(e.to_string());
+                }
+            }
             _ => (),
         }
     }
+    report.feedback.skipped_system = system_skips.get();
     report.projects.sort_by(|a, b| b.size.cmp(&a.size));
     Ok(report)
 }
@@ -312,6 +331,28 @@ pub fn cleanup(path: &str, directories: Vec<String>) -> Result<CleanupResult, St
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_children_are_skipped_but_an_unreadable_root_is_an_error() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let blocked = root.path().join("protected");
+        std::fs::create_dir(&blocked).unwrap();
+        std::fs::write(root.path().join("package.json"), "{}").unwrap();
+        std::fs::create_dir(root.path().join("dist")).unwrap();
+        std::fs::write(root.path().join("keep.txt"), "keep").unwrap();
+        std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let report = scan(root.path().to_str().unwrap(), 8, false).unwrap();
+        std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(report.feedback.skipped_permissions, 1);
+        assert!(report.warnings.is_empty());
+        assert_eq!(report.projects.len(), 1);
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o000)).unwrap();
+        let error = scan(root.path().to_str().unwrap(), 8, false).err().unwrap();
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(error.contains("Cannot read the selected folder"));
+    }
+
     use super::*;
     fn fixture(manifest: &str, names: &[&str]) -> tempfile::TempDir {
         let root = tempfile::tempdir().unwrap();

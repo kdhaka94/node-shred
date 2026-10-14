@@ -1445,3 +1445,227 @@ button {
     transition: none !important;
   }
 }
+
+/* Folder navigation and an editable, inspectable cleanup review. */
+.choose-folder {
+  width: 100%;
+  margin-bottom: 10px;
+  justify-content: center;
+}
+.location {
+  display: block;
+  cursor: default;
+  border-bottom: 1px solid #25303e;
+}
+.location > label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+}
+.location small {
+  max-width: 190px;
+}
+.location-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-left: 24px;
+}
+.folder-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 0;
+  background: transparent;
+  color: #b7ceee;
+  font-size: 11px;
+  text-align: left;
+}
+.folder-link:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+.folder-link .icon {
+  width: 12px;
+  height: 12px;
+}
+.remove-location {
+  background: transparent;
+  color: #95a5ba;
+  padding: 6px;
+}
+.remove-location .icon {
+  width: 12px;
+  height: 12px;
+}
+.manual-path {
+  margin-top: 12px;
+  font-size: 11px;
+  color: #a0aec0;
+}
+.manual-path summary,
+.scanned-locations summary {
+  cursor: pointer;
+}
+.scan-feedback {
+  padding: 14px 18px;
+  border: 1px solid #36504e;
+  border-radius: 10px;
+  background: #152321;
+  margin-bottom: 18px;
+  font-size: 12px;
+}
+.scan-feedback > div {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+.scan-feedback .icon {
+  color: #9fc7b5;
+  flex-shrink: 0;
+}
+.scan-feedback p {
+  margin: 0;
+  line-height: 1.7;
+}
+.scan-feedback strong,
+.scan-feedback span {
+  display: block;
+}
+.scan-feedback span {
+  color: #b1c3bf;
+}
+.scan-feedback details {
+  margin-top: 10px;
+  color: #b1c3bf;
+}
+.scan-feedback li {
+  overflow-wrap: anywhere;
+  margin: 6px 0;
+}
+.scanned-locations {
+  margin: 0 0 18px;
+  font-size: 12px;
+  color: #b1c3d6;
+}
+.scanned-locations > div {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  margin: 6px 0;
+}
+.full-path {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: normal;
+}
+.review-dialog {
+  width: min(680px, calc(100vw - 32px));
+}
+.review-list {
+  max-height: min(42vh, 390px);
+  scrollbar-gutter: stable;
+}
+.review-help {
+  font-size: 12px;
+  color: #b1c3d6;
+  line-height: 1.6;
+}
+.review-entry {
+  padding: 15px;
+  border-bottom: 1px solid #313c4b;
+}
+.review-entry:last-child {
+  border-bottom: 0;
+}
+.review-entry.excluded {
+  opacity: 0.65;
+}
+.review-entry-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.review-list strong {
+  padding: 0;
+}
+.review-entry-heading > span {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--accent);
+  white-space: nowrap;
+}
+.review-list .full-path {
+  font-size: 12px;
+  color: #b1c3d6;
+  display: block;
+  margin: 7px 0;
+}
+.review-targets {
+  margin-top: 12px;
+}
+.review-target {
+  margin-top: 8px;
+  padding: 10px 12px;
+  border: 1px solid #354335;
+  border-radius: 6px;
+  background: #17231d;
+}
+.review-target > label {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  cursor: pointer;
+}
+.review-target > label > span {
+  margin-left: auto;
+  font-size: 11px;
+  white-space: nowrap;
+  color: #b6c5bb;
+}
+.review-error {
+  color: #f1b68c;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.directory-row {
+  display: block;
+}
+.directory-row > label {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  cursor: pointer;
+}
+.directory-row > .full-path {
+  display: block;
+  color: #93a5bb;
+  font-size: 10px;
+  margin: 7px 0 0 22px;
+}
+.directory-row > .folder-link {
+  margin-left: 22px;
+}
+button:focus-visible,
+summary:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+@media (max-width: 600px) {
+  .scanned-locations > div {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .review-entry,
+  .review-target {
+    padding: 10px;
+  }
+  .directory-row > label {
+    flex-wrap: wrap;
+  }
+}

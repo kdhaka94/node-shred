@@ -1,5 +1,8 @@
 import { expect, test } from "bun:test";
 import {
+  activePlanEntries,
+  artifactPath,
+  mergeScanFeedback,
   chosenDirectories,
   formatSize,
   matchesFilters,
@@ -75,4 +78,38 @@ test("size formatting handles zero and terabytes", () => {
   expect(formatSize(0)).toBe("0 B");
   expect(formatSize(1024)).toBe("1 KB");
   expect(formatSize(1024 ** 4)).toBe("1 TB");
+});
+
+test("permission totals survive aggregation while examples remain bounded", () => {
+  const feedback = mergeScanFeedback(
+    { skipped_permissions: 50, skipped_system: 2, examples: ["/a", "/b"] },
+    {
+      skipped_permissions: 30,
+      skipped_system: 4,
+      examples: ["/b", "/c", "/d"],
+    },
+  );
+  expect(feedback).toEqual({
+    skipped_permissions: 80,
+    skipped_system: 6,
+    examples: ["/a", "/b", "/c"],
+  });
+});
+test("artifact paths preserve Windows separators and nested target paths", () => {
+  expect(artifactPath("C:\\Projects\\app\\", ".angular/cache")).toBe(
+    "C:\\Projects\\app\\.angular\\cache",
+  );
+  expect(artifactPath("/projects/app/", "dist")).toBe("/projects/app/dist");
+});
+test("unchecked review entries never reach cleanup", () => {
+  const entries = [
+    { path: "/one", size: 10, names: ["dist"], included: true },
+    { path: "/two", size: 20, names: [], included: false },
+  ];
+  expect(
+    activePlanEntries({ mode: "files", entries }).map((e) => e.path),
+  ).toEqual(["/one"]);
+  expect(
+    activePlanEntries({ mode: "projects", entries }).map((e) => e.path),
+  ).toEqual(["/one"]);
 });

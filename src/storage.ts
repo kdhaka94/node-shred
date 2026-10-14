@@ -88,3 +88,51 @@ export function matchesFilters(
         item.last_modified < Date.now() / 1000 - days * 86400))
   );
 }
+
+export interface ScanFeedback {
+  skipped_permissions: number;
+  skipped_system: number;
+  examples: string[];
+}
+export const emptyScanFeedback = (): ScanFeedback => ({
+  skipped_permissions: 0,
+  skipped_system: 0,
+  examples: [],
+});
+export function mergeScanFeedback(
+  current: ScanFeedback,
+  incoming?: ScanFeedback,
+): ScanFeedback {
+  if (!incoming) return current;
+  return {
+    skipped_permissions:
+      current.skipped_permissions + incoming.skipped_permissions,
+    skipped_system: current.skipped_system + incoming.skipped_system,
+    examples: [...new Set([...current.examples, ...incoming.examples])].slice(
+      0,
+      3,
+    ),
+  };
+}
+export function artifactPath(root: string, name: string): string {
+  const separator = root.includes("\\") ? "\\" : "/";
+  return (
+    root.replace(/[\\/]$/, "") + separator + name.replace(/\//g, separator)
+  );
+}
+export type CleanupMode = "projects" | "files";
+export interface CleanupPlan {
+  mode: CleanupMode;
+  entries: {
+    path: string;
+    names: string[];
+    size: number;
+    directories?: DirectoryInfo[];
+    included?: boolean;
+  }[];
+}
+export function activePlanEntries(plan: CleanupPlan) {
+  return plan.entries.filter((entry) =>
+    plan.mode === "files" ? entry.included !== false : entry.names.length > 0,
+  );
+}

@@ -1,5 +1,7 @@
 mod cleanup;
 mod files;
+mod navigation;
+mod scan_policy;
 use serde::Serialize;
 use std::path::PathBuf;
 
@@ -106,12 +108,18 @@ pub fn run() {
     tauri::Builder::default()
         .manage(std::sync::Arc::new(files::FileRegistry::default()))
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             scan_for_projects,
             delete_project_directories,
             get_drives,
             scan_folder_files,
-            delete_selected_files
+            delete_selected_files,
+            navigation::select_folders,
+            navigation::validate_scan_folder,
+            navigation::open_folder,
+            navigation::reveal_file
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

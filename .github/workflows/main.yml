@@ -85,7 +85,7 @@ jobs:
           cat > "$RUNNER_TEMP/release-notes.md" <<'NOTES'
           Selective cleanup for JavaScript, Python, Rust, and PHP projects, plus individual files and downloads.
 
-          Includes a redesigned storage dashboard, per-folder selection, cleanup presets, filtering, and exact-path review before permanent deletion.
+          Includes native folder selection, Open in Finder/Explorer and file reveal actions, editable per-target review with full paths and sizes, keyboard navigation, and summarized permission skips. Changing scan locations or settings requires a fresh scan before cleanup.
 
           Download the universal macOS DMG (Apple Silicon and Intel), Windows installer, or Linux DEB/AppImage below. macOS and Windows builds are not signed with distribution certificates; macOS builds are not notarized. No signing secrets are required for this preview.
           NOTES

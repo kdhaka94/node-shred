@@ -1,4 +1,5 @@
 const paths = {
+  external: "M14 3h7v7m0-7L10 14M10 3H3v18h18v-7",
   layers: "m12 3 9 5-9 5-9-5 9-5Zm-9 9 9 5 9-5M3 16l9 5 9-5",
   grid: "M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z",
   folder:
