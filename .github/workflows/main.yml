@@ -144,6 +144,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
+          tauriScript: bash scripts/tauri-ci.sh
           tagName: ${{ needs.verify.outputs.tag }}
           releaseName: NodeShred ${{ needs.verify.outputs.version }}
           releaseDraft: true
@@ -152,6 +153,19 @@ jobs:
           includeRelease: true
           includeUpdaterJson: false
           args: ${{ matrix.args }} -- --locked
+
+      - name: Include build failure details in the run summary
+        if: failure()
+        shell: bash
+        run: |
+          if [ -f src-tauri/target/ci-build.log ]; then
+            {
+              echo '### Build failure details'
+              echo '```text'
+              tail -n 100 src-tauri/target/ci-build.log
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
   publish:
     name: Publish completed release
